@@ -1,5 +1,7 @@
 # PDF Splitter
 
+<img src="app-icon-1024.png" alt="PDF Splitter" width="96" height="96">
+
 A local desktop app for splitting large PDF files into smaller parts. Built for people who need to break down massive PDFs (4000+ pages, 150–200 MB) into chunks that fit within the upload limits of AI tools like NotebookLM, ChatGPT Projects, Claude, Gemini Gems, and others.
 
 ---
