@@ -535,6 +535,53 @@ select {
   margin-bottom: 0;
 }
 
+/* Workers block */
+.workers-block {
+  margin-bottom: 18px;
+}
+
+.workers-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 8px;
+}
+
+.workers-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.worker-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  font-size: 0.82rem;
+  font-weight: 500;
+  border: 1px solid var(--border-light);
+}
+
+.worker-slot.waiting {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.worker-slot.compressing {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.worker-slot.done {
+  background: var(--success-light);
+  color: var(--success);
+}
+
 .progress-label {
   display: flex;
   justify-content: space-between;

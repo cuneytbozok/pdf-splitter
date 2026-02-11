@@ -22,11 +22,20 @@ from backend.compressor import compress_pdf, repair_pdf, gs_available
 # ---------------------------------------------------------------------------
 # Type alias for the progress callback
 # ---------------------------------------------------------------------------
-ProgressCallback = Callable[[int, int, int, int, str], None]
-# (current_page, total_pages, current_part, total_parts, status_message)
+# (current_page, total_pages, current_part, total_parts, status_message, **kwargs e.g. bytes_written)
+ProgressCallback = Callable[..., None]
 
 CancelChecker = Callable[[], bool]
 # returns True when the user has requested cancellation
+
+OnCompressPartStart = Callable[[int], None]
+# called when a worker starts compressing part idx (1-based)
+
+OnCompressProgress = Callable[[int, int, int, int], None]
+# called periodically: (part_index_1based, tmp_size_bytes, input_size_bytes, estimated_output_bytes)
+
+# Typical output/input ratios by preset (for progress estimation)
+_COMPRESSION_OUTPUT_RATIO = {"low": 0.25, "medium": 0.4, "high": 0.6, "maximum": 0.9}
 
 
 # ---------------------------------------------------------------------------
@@ -101,28 +110,32 @@ def _compress_one(
     num_parts: int,
     page_offset: int,
     size: int,
+    on_part_start: Optional[OnCompressPartStart] = None,
+    on_compress_progress: Optional[OnCompressProgress] = None,
 ) -> None:
     """Compress a single part (used for parallel workers)."""
+    if on_part_start:
+        on_part_start(idx + 1)
     if progress_cb:
         progress_cb(
             page_offset + size, total,
             idx + 1, num_parts,
-            f"Compressing part {idx + 1}/{num_parts} (this may take a while)...",
+            f"Compressing part {idx + 1}/{num_parts}...",
         )
 
+    input_size = os.path.getsize(out_path) if os.path.exists(out_path) else 1
+    ratio = _COMPRESSION_OUTPUT_RATIO.get(compression, 0.5)
+    estimated_output = max(1, int(input_size * ratio))
+
     def compression_progress(tmp_path: str) -> None:
-        if progress_cb and os.path.exists(tmp_path):
-            size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
-            progress_cb(
-                page_offset + size, total,
-                idx + 1, num_parts,
-                f"Compressing part {idx + 1}/{num_parts} (output so far: {size_mb:.1f} MB)...",
-            )
+        if on_compress_progress and os.path.exists(tmp_path):
+            tmp_size = os.path.getsize(tmp_path)
+            on_compress_progress(idx + 1, tmp_size, input_size, estimated_output)
 
     compress_pdf(
         out_path, compression,
         cancel_check=cancel_check,
-        progress_cb=compression_progress,
+        progress_cb=compression_progress if on_compress_progress else None,
     )
 
 
@@ -135,6 +148,8 @@ def _do_split(
     progress_cb: Optional[ProgressCallback] = None,
     cancel_check: Optional[CancelChecker] = None,
     compression_workers: int = 1,
+    on_compress_part_start: Optional[OnCompressPartStart] = None,
+    on_compress_progress: Optional[OnCompressProgress] = None,
 ) -> list[str]:
     """
     Shared implementation: given pre-computed *sizes* (page counts per part),
@@ -158,6 +173,14 @@ def _do_split(
             progress_cb, cancel_check,
             idx, num_parts, page_offset, total,
         )
+        if progress_cb:
+            progress_cb(
+                page_offset + size,
+                total,
+                idx + 1,
+                num_parts,
+                f"Part {idx + 1}/{num_parts} written",
+            )
         outputs.append(out_path)
         page_offset += size
         start = end
@@ -174,7 +197,6 @@ def _do_split(
         page_offsets.append(page_offsets[-1] + size)
 
     if workers == 1:
-        # Sequential: current behavior with "output so far"
         for idx, size in enumerate(sizes):
             if cancel_check and cancel_check():
                 raise InterruptedError("Cancelled by user")
@@ -182,6 +204,7 @@ def _do_split(
             _compress_one(
                 out_path, compression, cancel_check, progress_cb,
                 total, idx, num_parts, page_offsets[idx], size,
+                on_compress_progress=on_compress_progress,
             )
         return outputs
 
@@ -209,8 +232,10 @@ def _do_split(
             po = page_offsets[idx]
             fut = executor.submit(
                 _compress_one,
-                out_path, compression, cancel_check, None,  # no per-part progress when parallel
+                out_path, compression, cancel_check, None,
                 total, idx, num_parts, po, size,
+                on_part_start=on_compress_part_start,
+                on_compress_progress=on_compress_progress,
             )
             fut.add_done_callback(on_part_done)
             futures.append(fut)
@@ -238,6 +263,8 @@ def split_by_parts(
     progress_cb: Optional[ProgressCallback] = None,
     cancel_check: Optional[CancelChecker] = None,
     compression_workers: int = 1,
+    on_compress_part_start: Optional[OnCompressPartStart] = None,
+    on_compress_progress: Optional[OnCompressProgress] = None,
 ) -> list[str]:
     """Split *input_path* into *num_parts* files with roughly equal page counts."""
     src = _open_pdf(input_path)
@@ -256,6 +283,8 @@ def split_by_parts(
         progress_cb=progress_cb,
         cancel_check=cancel_check,
         compression_workers=compression_workers,
+        on_compress_part_start=on_compress_part_start,
+        on_compress_progress=on_compress_progress,
     )
 
 
@@ -268,6 +297,8 @@ def split_by_max_pages(
     progress_cb: Optional[ProgressCallback] = None,
     cancel_check: Optional[CancelChecker] = None,
     compression_workers: int = 1,
+    on_compress_part_start: Optional[OnCompressPartStart] = None,
+    on_compress_progress: Optional[OnCompressProgress] = None,
 ) -> list[str]:
     """Split so that each output file has at most *max_pages* pages."""
     src = _open_pdf(input_path)
@@ -285,6 +316,8 @@ def split_by_max_pages(
         progress_cb=progress_cb,
         cancel_check=cancel_check,
         compression_workers=compression_workers,
+        on_compress_part_start=on_compress_part_start,
+        on_compress_progress=on_compress_progress,
     )
 
 
@@ -297,6 +330,8 @@ def split_by_target_size(
     progress_cb: Optional[ProgressCallback] = None,
     cancel_check: Optional[CancelChecker] = None,
     compression_workers: int = 1,
+    on_compress_part_start: Optional[OnCompressPartStart] = None,
+    on_compress_progress: Optional[OnCompressProgress] = None,
 ) -> list[str]:
     """
     Split so that each output file is approximately under *target_bytes*.
@@ -325,4 +360,6 @@ def split_by_target_size(
         progress_cb=progress_cb,
         cancel_check=cancel_check,
         compression_workers=compression_workers,
+        on_compress_part_start=on_compress_part_start,
+        on_compress_progress=on_compress_progress,
     )

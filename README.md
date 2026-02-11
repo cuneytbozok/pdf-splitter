@@ -23,18 +23,25 @@ A local desktop app for splitting large PDF files into smaller parts. Built for 
 
 You can choose **None** (no compression, no Ghostscript — split only) or one of the presets below. Presets use Ghostscript and rewrite the PDF; "None" skips that step entirely.
 
-| Preset | Quality | Image DPI | Best For |
+**Note:** More compression = smaller files. Less compression = larger files (higher quality). In PDF tools, "maximum quality" means minimal compression and largest files — not "maximum compression."
+
+| Preset | Output size | Image DPI | Best for |
 |---|---|---|---|
-| Low | Smallest file size | 72 DPI | Maximum compression, screen reading |
-| Medium | Balanced | 150 DPI | Good default for AI tool uploads |
-| High | Print quality | 300 DPI | When image quality matters |
-| Best quality | Highest fidelity, least compression | — | Near-original, largest files |
+| High compression | Smallest files | 72 DPI | Maximum size reduction, screen reading |
+| Medium compression | Balanced | 150 DPI | Good default for AI tool uploads |
+| Low compression | Larger files | 300 DPI | When image quality matters |
+| Minimal compression | Largest files | — | Best quality, near-original fidelity |
 
 Compression presets require Ghostscript (see installation below). If Ghostscript is not installed, the app works fine — you just won't have compression or PDF repair (use "None" for split-only).
 
 ### Parallel compression
 
-When compression is enabled, you can set **compression workers** (1–8). With more than one worker, the app runs multiple Ghostscript processes in parallel (one per part, up to the worker limit), so compression time can drop significantly when splitting into several parts. Each worker uses about **500 MB RAM** on average for large PDFs; the app shows an estimated peak RAM so you can stay within your system’s free memory. The hard limit is 8 workers.
+When compression is enabled, you can set **compression workers** (1–8). This is the maximum number of Ghostscript processes that run at the same time. The app **caps the worker count to the number of output parts** so you never set more workers than parts:
+
+- **By number of parts** — Max workers = number of parts (e.g. 2 parts → 1 or 2 workers only).
+- **By max pages per file** / **By target file size** — Max workers = largest number of parts among the selected files (based on their page count and your setting).
+
+Example: if you split into 2 parts, only 2 workers can be used; if you split into 6 parts, you can use 1–6 workers (up to the 8 global limit). Each worker uses about **500 MB RAM** on average for large PDFs; the app shows an estimated peak RAM so you can stay within your system’s free memory.
 
 ---
 
@@ -149,12 +156,12 @@ python3 main.py --debug
    - **Split mode** — Choose how you want to split (by parts, by max pages, or by target size)
    - **Value** — Enter the number of parts, max pages per file, or target size in MB
    - **Compression** — Pick a preset or choose "None" to skip compression
-   - **Compression workers** — When compression is on, set 1–8 workers. More workers run compression in parallel (faster) and use more RAM (~500 MB per worker). The app shows estimated peak RAM.
+   - **Compression workers** — When compression is on, choose 1 to N (N is limited by the number of parts for your current split mode and files; max 8). More workers run compression in parallel and use more RAM (~500 MB per worker). The app shows estimated peak RAM.
    - **Output folder** — Click Browse to select where output files are saved
 
 4. **Start processing** — Click the Start button. You'll see:
-   - Per-file progress bar with page count during splitting
-   - A pulsing animation during Ghostscript compression (no granular progress available)
+   - Per-file progress bar (page-based during split; estimated during compression)
+   - Worker status when using multiple compression workers
    - Overall progress across all files
    - Status messages for each phase (splitting, compressing)
 
@@ -218,7 +225,7 @@ This is expected for very large files (4000+ pages). The app processes pages one
 - Choose **"None"** compression for fastest processing
 - Use **compression workers** (2–4) when splitting into multiple parts — parallel compression can cut total time roughly in proportion to workers (e.g. 2 workers ≈ half the compression time). Ensure you have enough free RAM (~500 MB per worker).
 - Split into fewer, larger parts if you don't need small files
-- During splitting, the progress bar updates page-by-page. During compression, it pulses or shows "X of Y parts done" when using multiple workers (Ghostscript doesn't report granular progress per file)
+- During splitting, the progress bar updates page-by-page. During compression, progress is estimated from the growing temp file size (Ghostscript doesn't report page-level progress). With multiple workers, you'll see which parts are compressing.
 
 ### "Error processing" toast
 

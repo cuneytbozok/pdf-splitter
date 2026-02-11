@@ -112,6 +112,8 @@ class Api:
         current_part: int,
         total_parts: int,
         status: str,
+        *,
+        bytes_written: Optional[int] = None,
     ) -> None:
         now = time.time()
         is_final = (current_page >= total_pages)
@@ -123,13 +125,16 @@ class Api:
                 return
 
         self._last_progress_push = now
-        data = json.dumps({
+        payload: dict[str, Any] = {
             "currentPage": current_page,
             "totalPages": total_pages,
             "currentPart": current_part,
             "totalParts": total_parts,
             "status": status,
-        })
+        }
+        if bytes_written is not None:
+            payload["bytesWritten"] = bytes_written
+        data = json.dumps(payload)
         self._push_js(f"window.__onProgress({data})")
 
     def _push_file_complete(self, filename: str, parts: list[str]) -> None:
@@ -141,6 +146,26 @@ class Api:
 
     def _push_error(self, message: str) -> None:
         self._push_js(f"window.__onError({json.dumps(message)})")
+
+    def _push_compress_part_start(self, part_index: int) -> None:
+        """Notify frontend that a worker started compressing part_index (1-based)."""
+        self._push_js(f"window.__onCompressPartStart({part_index})")
+
+    def _push_compress_progress(
+        self,
+        part_index: int,
+        tmp_size: int,
+        input_size: int,
+        estimated_output: int,
+    ) -> None:
+        """Notify frontend of compression progress (tmp file growing)."""
+        payload = json.dumps({
+            "partIndex": part_index,
+            "tmpSize": tmp_size,
+            "inputSize": input_size,
+            "estimatedOutput": estimated_output,
+        })
+        self._push_js(f"window.__onCompressProgress({payload})")
 
     # ------------------------------------------------------------------
     # Public API: called from JavaScript
@@ -182,10 +207,10 @@ class Api:
     def get_compression_presets(self) -> list[dict[str, str]]:
         """Return available compression presets for the UI dropdown."""
         labels = {
-            "low": "Low (smallest size)",
-            "medium": "Medium (balanced)",
-            "high": "High quality",
-            "maximum": "Maximum quality",
+            "low": "High compression (smallest files)",
+            "medium": "Medium compression (balanced)",
+            "high": "Low compression (high quality)",
+            "maximum": "Minimal compression (largest files)",
         }
         return [
             {"value": key, "label": labels.get(key, key)}
@@ -260,6 +285,7 @@ class Api:
                         cur_part: int,
                         tot_parts: int,
                         status: str,
+                        **kwargs: Any,
                     ) -> None:
                         self._push_progress(
                             cur_page, tot_pages,
@@ -270,6 +296,22 @@ class Api:
 
                 progress_cb = make_progress_cb(filename)
 
+                def on_compress_part_start(part_index: int) -> None:
+                    self._push_compress_part_start(part_index)
+
+                def on_compress_progress(
+                    part_index: int,
+                    tmp_size: int,
+                    input_size: int,
+                    estimated_output: int,
+                ) -> None:
+                    self._push_compress_progress(
+                        part_index, tmp_size, input_size, estimated_output
+                    )
+
+                on_part_start = on_compress_part_start if (compression and workers > 1) else None
+                on_progress = on_compress_progress if compression else None
+
                 try:
                     if split_mode == "parts":
                         outputs = split_by_parts(
@@ -278,6 +320,8 @@ class Api:
                             progress_cb=progress_cb,
                             cancel_check=cancel_check,
                             compression_workers=workers,
+                            on_compress_part_start=on_part_start,
+                            on_compress_progress=on_progress,
                         )
                     elif split_mode == "pages":
                         outputs = split_by_max_pages(
@@ -286,6 +330,8 @@ class Api:
                             progress_cb=progress_cb,
                             cancel_check=cancel_check,
                             compression_workers=workers,
+                            on_compress_part_start=on_part_start,
+                            on_compress_progress=on_progress,
                         )
                     elif split_mode == "size":
                         target_bytes = split_value * 1024 * 1024  # MB → bytes
@@ -295,6 +341,8 @@ class Api:
                             progress_cb=progress_cb,
                             cancel_check=cancel_check,
                             compression_workers=workers,
+                            on_compress_part_start=on_part_start,
+                            on_compress_progress=on_progress,
                         )
                     else:
                         self._push_error(f"Unknown split mode: {split_mode}")

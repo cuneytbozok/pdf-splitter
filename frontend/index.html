@@ -72,10 +72,10 @@
           <label for="compression">Compression</label>
           <select id="compression">
             <option value="none">None (no compression)</option>
-            <option value="low">Low (smallest size, 72 DPI)</option>
-            <option value="medium" selected>Medium (balanced, 150 DPI)</option>
-            <option value="high">High quality (300 DPI)</option>
-            <option value="maximum">Best quality (least compression, largest files)</option>
+            <option value="low">High compression (smallest files)</option>
+            <option value="medium" selected>Medium compression (balanced)</option>
+            <option value="high">Low compression (high quality)</option>
+            <option value="maximum">Minimal compression (largest files)</option>
           </select>
         </div>
 
@@ -84,7 +84,7 @@
           <label for="compressionWorkers">Compression workers</label>
           <div class="input-with-unit">
             <input id="compressionWorkers" type="number" min="1" max="8" value="2" />
-            <span class="input-unit">workers (max 8)</span>
+            <span id="workersUnit" class="input-unit">workers (1–8)</span>
           </div>
           <p id="ramEstimate" class="setting-hint">Estimated peak RAM: ~1 GB</p>
         </div>
@@ -133,6 +133,12 @@
           <span id="progressPages">0 / 0 pages</span>
           <span id="progressPercent">0%</span>
         </div>
+      </div>
+
+      <!-- Workers (only shown when compression enabled and workers > 1) -->
+      <div id="workersBlock" class="workers-block hidden">
+        <div class="workers-label">Workers</div>
+        <div id="workersSlots" class="workers-slots"></div>
       </div>
 
       <!-- Overall progress -->

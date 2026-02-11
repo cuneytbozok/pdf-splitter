@@ -16,12 +16,19 @@
 // State
 // ================================================================
 const state = {
-  files: [],          // Array of { path, name, pages, size_bytes, size_human, status, error }
+  files: [],
   outputFolder: "",
   processing: false,
   completedFiles: 0,
   totalFiles: 0,
   gsAvailable: false,
+  compressionWorkers: 1,
+  compressionEnabled: false,
+  partsStarted: [],
+  partsCompleted: 0,
+  totalParts: 0,
+  totalPages: 0,
+  partProgress: {},  // partIndex -> 0..1 (tmp_size/input_size) during compression
 };
 
 // ================================================================
@@ -44,6 +51,7 @@ const dom = {
   compression: $("#compression"),
   workersGroup: $("#workersGroup"),
   compressionWorkers: $("#compressionWorkers"),
+  workersUnit: $("#workersUnit"),
   ramEstimate: $("#ramEstimate"),
   outputFolder: $("#outputFolder"),
   browseFolderBtn: $("#browseFolderBtn"),
@@ -60,6 +68,8 @@ const dom = {
   overallDetail: $("#overallDetail"),
   overallFiles: $("#overallFiles"),
   overallPercent: $("#overallPercent"),
+  workersBlock: $("#workersBlock"),
+  workersSlots: $("#workersSlots"),
   completeSection: $("#completeSection"),
   completeTitle: $("#completeTitle"),
   completeSummary: $("#completeSummary"),
@@ -241,24 +251,77 @@ function setupSettings() {
   dom.compression.addEventListener("change", updateWorkersVisibility);
   dom.compressionWorkers.addEventListener("input", updateRamEstimate);
   dom.compressionWorkers.addEventListener("change", () => {
-    const v = Math.min(8, Math.max(1, parseInt(dom.compressionWorkers.value) || 2));
+    const maxW = parseInt(dom.compressionWorkers.max, 10) || 8;
+    const v = Math.min(maxW, Math.max(1, parseInt(dom.compressionWorkers.value) || 2));
     dom.compressionWorkers.value = String(v);
     updateRamEstimate();
   });
+  dom.splitValue.addEventListener("input", () => {
+    validateStart();
+    updateWorkersCap();
+  });
   updateSplitModeUI();
   updateWorkersVisibility();
-  updateRamEstimate();
+  updateWorkersCap();
 }
 
 function updateWorkersVisibility() {
   const hasCompression = dom.compression.value !== "none";
   dom.workersGroup.classList.toggle("hidden", !hasCompression);
+  if (hasCompression) updateWorkersCap();
 }
 
 function updateRamEstimate() {
-  const w = Math.min(8, Math.max(1, parseInt(dom.compressionWorkers.value) || 2));
+  const maxW = parseInt(dom.compressionWorkers.max, 10) || 8;
+  const w = Math.min(maxW, Math.max(1, parseInt(dom.compressionWorkers.value) || 2));
   const gb = (w * RAM_PER_WORKER_GB).toFixed(1);
   dom.ramEstimate.textContent = `Estimated peak RAM: ~${gb} GB`;
+}
+
+/**
+ * Max workers = min(8, max number of parts).
+ * Parts mode: number of parts from splitValue.
+ * Pages/Size mode: max over selected files of num parts (or 8 when no files).
+ */
+function computeMaxWorkers() {
+  const mode = dom.splitMode.value;
+  const splitVal = Math.max(0, parseInt(dom.splitValue.value, 10) || 0);
+  const files = state.files.filter((f) => f.status !== "error");
+
+  if (mode === "parts") {
+    return Math.min(8, Math.max(1, splitVal));
+  }
+  if (files.length === 0) {
+    return 8;
+  }
+  let maxParts = 1;
+  for (const file of files) {
+    const pages = file.pages || 1;
+    const sizeBytes = file.size_bytes || 0;
+    let numParts;
+    if (mode === "pages") {
+      numParts = Math.ceil(pages / Math.max(1, splitVal));
+    } else {
+      const targetBytes = splitVal * 1024 * 1024;
+      const bytesPerPage = pages > 0 ? sizeBytes / pages : 0;
+      const pagesPerPart = Math.max(1, Math.floor(targetBytes / bytesPerPage));
+      numParts = Math.ceil(pages / pagesPerPart);
+    }
+    maxParts = Math.max(maxParts, numParts);
+  }
+  return Math.min(8, Math.max(1, maxParts));
+}
+
+function updateWorkersCap() {
+  const maxW = computeMaxWorkers();
+  dom.compressionWorkers.max = String(maxW);
+  dom.compressionWorkers.min = "1";
+  const current = parseInt(dom.compressionWorkers.value, 10) || 1;
+  if (current > maxW) {
+    dom.compressionWorkers.value = String(maxW);
+  }
+  dom.workersUnit.textContent = `workers (1–${maxW})`;
+  updateRamEstimate();
 }
 
 // Default values per split mode
@@ -290,6 +353,7 @@ function updateSplitModeUI() {
       break;
   }
   validateStart();
+  updateWorkersCap();
 }
 
 function disableCompression() {
@@ -344,7 +408,8 @@ async function startProcessing() {
     }
   }
 
-  const workers = Math.min(8, Math.max(1, parseInt(dom.compressionWorkers.value) || 2));
+  const maxWorkers = parseInt(dom.compressionWorkers.max, 10) || 8;
+  const workers = Math.min(maxWorkers, Math.max(1, parseInt(dom.compressionWorkers.value) || 2));
 
   const config = {
     files: validFiles.map((f) => f.path),
@@ -356,6 +421,10 @@ async function startProcessing() {
   };
 
   state.processing = true;
+  state.compressionWorkers = workers;
+  state.compressionEnabled = dom.compression.value !== "none";
+  state.partsStarted = [];
+  state.partsCompleted = 0;
   state.completedFiles = 0;
   state.totalFiles = state.files.length;
 
@@ -369,7 +438,7 @@ async function startProcessing() {
   setSettingsEnabled(false);
 
   // Reset progress UI
-  updateProgressUI(0, 1, 0, 1, "Starting...");
+  updateProgressUI(0, 1, 0, 1, "Starting...", 0);
   updateOverallUI(0, state.totalFiles);
 
   try {
@@ -396,19 +465,80 @@ async function cancelProcessing() {
 
 function setupGlobalCallbacks() {
   window.__onProgress = (data) => {
-    updateProgressUI(
+    if (data.status && data.status.startsWith("Starting")) {
+      state.partsStarted = [];
+      state.partsCompleted = 0;
+      state.partProgress = {};
+    }
+    state.totalParts = data.totalParts || 0;
+    state.totalPages = data.totalPages || 0;
+    const isPartsDone = data.status && data.status.includes("parts done");
+    if (isPartsDone) {
+      state.partsCompleted = data.currentPart || 0;
+    }
+    const fileProgress = computeFileProgress(
       data.currentPage,
       data.totalPages,
       data.currentPart,
       data.totalParts,
       data.status
     );
+    updateProgressUI(
+      data.currentPage,
+      data.totalPages,
+      data.currentPart,
+      data.totalParts,
+      data.status,
+      fileProgress
+    );
+    updateWorkersUI();
+    updateOverallUI(state.completedFiles, state.totalFiles, fileProgress);
   };
 
   window.__onFileComplete = (data) => {
     state.completedFiles++;
-    updateOverallUI(state.completedFiles, state.totalFiles);
+    state.partsStarted = [];
+    state.partsCompleted = 0;
+    state.partProgress = {};
+    updateWorkersUI();
+    updateOverallUI(state.completedFiles, state.totalFiles, 0);
     markFileComplete(data.filename);
+  };
+
+  window.__onCompressProgress = (data) => {
+    const estimatedOutput = Math.max(1, data.estimatedOutput || data.inputSize || 1);
+    state.partProgress[data.partIndex] = Math.min(1, (data.tmpSize || 0) / estimatedOutput);
+    const fileProgress = computeFileProgressFromState();
+    updateProgressUI(
+      state.totalPages,
+      state.totalPages,
+      state.partsCompleted,
+      state.totalParts,
+      "Compressing...",
+      fileProgress
+    );
+    updateOverallUI(state.completedFiles, state.totalFiles, fileProgress);
+  };
+
+  window.__onCompressPartStart = (partIndex) => {
+    state.partsStarted.push(partIndex);
+    updateWorkersUI();
+    // In parallel mode we don't get __onProgress until a part completes, so refresh
+    // the progress UI now: we're in compression phase (split done, workers active).
+    if (state.totalPages > 0 && state.totalParts > 0) {
+      const fileProgress = state.compressionEnabled
+        ? 0.5 + 0.5 * (state.partsCompleted / state.totalParts)
+        : 1;
+      updateProgressUI(
+        state.totalPages,
+        state.totalPages,
+        state.partsCompleted,
+        state.totalParts,
+        "Compressing...",
+        fileProgress
+      );
+      updateOverallUI(state.completedFiles, state.totalFiles, fileProgress);
+    }
   };
 
   window.__onAllComplete = (summary) => {
@@ -461,6 +591,7 @@ function updateUI() {
   dom.actionSection.classList.toggle("hidden", !hasFiles);
 
   validateStart();
+  updateWorkersCap();
 }
 
 function renderFileQueue() {
@@ -508,50 +639,129 @@ function markFileComplete(filename) {
   }
 }
 
-function updateProgressUI(currentPage, totalPages, currentPart, totalParts, status) {
-  const isCompressing = status && status.toLowerCase().includes("compressing");
-  const isPartsDone = status && status.includes("parts done"); // parallel compression
-  const totalSteps = totalParts * 2; // each part: split + compress
-
-  let pct;
-  if (isPartsDone) {
-    // Parallel compression: currentPart = parts compressed so far, bar 50% → 100%
-    pct = totalParts > 0 ? Math.round(50 + (50 * currentPart) / totalParts) : 50;
-    dom.progressPages.textContent = `${totalPages.toLocaleString()} pages written`;
-    dom.progressDetail.textContent = status || `Compressing (${currentPart} of ${totalParts} parts done)`;
-  } else if (isCompressing) {
-    // Sequential: compressing part K = step 2K done, no sub-progress
-    pct = totalSteps > 0 ? Math.round(((2 * currentPart - 1) / totalSteps) * 100) : 0;
-    dom.progressPages.textContent = `${currentPage.toLocaleString()} / ${totalPages.toLocaleString()} pages written`;
-    const hasSizeUpdate = status && status.includes("output so far");
-    dom.progressDetail.textContent = hasSizeUpdate
-      ? `Compressing part ${currentPart} of ${totalParts} — output file growing`
-      : `Compressing part ${currentPart} of ${totalParts} — may take several minutes`;
-  } else {
-    // Splitting: progress = (step - 1 + progress_in_step) / totalSteps
-    const stepIndex = (currentPart - 1) * 2 + 1;
-    const pagesPerPart = totalPages / totalParts;
-    const progressInStep = pagesPerPart > 0
-      ? Math.min(1, (currentPage - (currentPart - 1) * pagesPerPart) / pagesPerPart)
-      : 0;
-    pct = totalSteps > 0 ? Math.round(((stepIndex - 1 + progressInStep) / totalSteps) * 100) : 0;
-    dom.progressPages.textContent = `${currentPage.toLocaleString()} / ${totalPages.toLocaleString()} pages`;
-    dom.progressDetail.textContent = `Part ${currentPart} of ${totalParts}`;
+/**
+ * Compute compression-phase progress from state.partProgress.
+ * Uses tmp file size / input size per part; completed parts = 1.
+ */
+function computeFileProgressFromState() {
+  if (!state.compressionEnabled || state.totalParts <= 0) return 0.5;
+  const completed = state.partsStarted.slice(0, state.partsCompleted);
+  let sum = 0;
+  for (let i = 1; i <= state.totalParts; i++) {
+    if (completed.includes(i)) {
+      sum += 1;
+    } else {
+      sum += state.partProgress[i] ?? 0;
+    }
   }
-
-  dom.progressBarFile.style.width = Math.min(100, pct) + "%";
-  dom.progressPercent.textContent = pct + "%";
-  dom.progressFileLabel.textContent = status || "Processing...";
-
-  dom.progressBarFile.classList.toggle("compressing", isCompressing || isPartsDone);
+  const compressFraction = sum / state.totalParts;
+  return 0.5 + 0.5 * compressFraction;
 }
 
-function updateOverallUI(completed, total) {
-  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+/**
+ * Compute current file progress 0..1.
+ * During split: page-based — currentPage/totalPages (e.g. 500/1000 = 50%).
+ * During compress: uses partProgress (tmp/input per part) when available.
+ */
+function computeFileProgress(currentPage, totalPages, currentPart, totalParts, status) {
+  if (totalPages <= 0 || (currentPart === 0 && !status)) return 0;
+  if (status && status.startsWith("Starting")) return 0;
+
+  const isPartsDone = status && status.includes("parts done");
+  const isCompressing = status && status.toLowerCase().includes("compressing");
+  const workersActive = state.partsStarted.length > 0;
+  const hasCompression = state.compressionEnabled;
+
+  if (isPartsDone) {
+    state.partsCompleted = currentPart;
+    const completed = state.partsStarted.slice(0, currentPart);
+    completed.forEach((i) => { state.partProgress[i] = 1; });
+    const compressFraction = currentPart / totalParts;
+    return hasCompression ? 0.5 + 0.5 * compressFraction : 1;
+  }
+  if (isCompressing || workersActive) {
+    if (Object.keys(state.partProgress).length > 0) {
+      return computeFileProgressFromState();
+    }
+    const partsDone = isCompressing ? currentPart - 1 : 0;
+    const compressFraction = totalParts > 0 ? partsDone / totalParts : 0;
+    return hasCompression ? 0.5 + 0.5 * compressFraction : 1;
+  }
+  const splitFraction = totalPages > 0 ? Math.min(1, currentPage / totalPages) : 0;
+  return hasCompression ? 0.5 * splitFraction : splitFraction;
+}
+
+function updateProgressUI(currentPage, totalPages, currentPart, totalParts, status, fileProgress) {
+  const isStarting = status && status.startsWith("Starting");
+  const isCompressing = status && status.toLowerCase().includes("compressing");
+  const isPartsDone = status && status.includes("parts done");
+  const workersActive = state.partsStarted.length > 0 && state.compressionWorkers > 1;
+  const pct = Math.round(Math.min(100, fileProgress * 100));
+
+  // Main label: phase + percent (workersActive = parallel compress started, no status yet)
+  const phaseLabel = isCompressing || isPartsDone || workersActive ? "Compressing" : "Splitting";
+  dom.progressFileLabel.textContent = isStarting ? status : `${phaseLabel} — ${pct}%`;
+
+  // Detail: part info only (no MB — intermediate sizes are misleading)
+  if (isStarting) {
+    dom.progressDetail.textContent = "";
+    dom.progressPages.textContent = "0 pages";
+  } else if (isPartsDone) {
+    dom.progressDetail.textContent = `${currentPart} of ${totalParts} parts compressed`;
+    dom.progressPages.textContent = `${totalPages.toLocaleString()} pages`;
+  } else if (isCompressing || workersActive) {
+    const doneText = state.partsCompleted > 0
+      ? `${state.partsCompleted} of ${totalParts} parts done`
+      : `${state.partsStarted.length} of ${totalParts} compressing`;
+    dom.progressDetail.textContent = doneText;
+    dom.progressPages.textContent = `${totalPages.toLocaleString()} pages (split done)`;
+  } else {
+    dom.progressDetail.textContent = status || `Part ${currentPart} of ${totalParts} — writing pages`;
+    dom.progressPages.textContent = `${currentPage.toLocaleString()} / ${totalPages.toLocaleString()} pages`;
+  }
+
+  dom.progressBarFile.style.width = pct + "%";
+  dom.progressPercent.textContent = pct + "%";
+  dom.progressBarFile.classList.toggle("compressing", isCompressing || isPartsDone || workersActive);
+}
+
+function updateWorkersUI() {
+  const show = state.compressionWorkers > 1 && state.totalParts >= 2 &&
+    (state.partsStarted.length > 0 || state.partsCompleted > 0);
+  dom.workersBlock.classList.toggle("hidden", !show);
+  if (!show) return;
+
+  const inProgress = state.partsStarted.slice(state.partsCompleted);
+  const completed = state.partsStarted.slice(0, state.partsCompleted);
+
+  dom.workersSlots.innerHTML = "";
+  for (let i = 1; i <= state.totalParts; i++) {
+    const span = document.createElement("span");
+    span.className = "worker-slot";
+    if (completed.includes(i)) {
+      span.classList.add("done");
+      span.textContent = `Part ${i} — done`;
+    } else if (inProgress.includes(i)) {
+      span.classList.add("compressing");
+      span.textContent = `Part ${i} — compressing`;
+    } else {
+      span.classList.add("waiting");
+      span.textContent = `Part ${i} — waiting`;
+    }
+    dom.workersSlots.appendChild(span);
+  }
+}
+
+function updateOverallUI(completed, total, fileProgress = 0) {
+  const overallFraction = total > 0 ? (completed + fileProgress) / total : 0;
+  const pct = Math.round(Math.min(100, overallFraction * 100));
   dom.progressBarOverall.style.width = pct + "%";
   dom.overallFiles.textContent = `${completed} / ${total} files`;
   dom.overallPercent.textContent = pct + "%";
-  dom.overallDetail.textContent = `${completed} of ${total} files complete`;
+  dom.overallDetail.textContent =
+    completed < total
+      ? `${completed} of ${total} files complete (current file ${Math.round(fileProgress * 100)}%)`
+      : `${completed} of ${total} files complete`;
 }
 
 function setSettingsEnabled(enabled) {
@@ -580,6 +790,9 @@ function resetApp() {
   state.processing = false;
   state.completedFiles = 0;
   state.totalFiles = 0;
+  state.partsStarted = [];
+  state.partsCompleted = 0;
+  state.partProgress = {};
 
   dom.outputFolder.value = "";
   dom.completeSection.classList.add("hidden");
