@@ -1,0 +1,24 @@
+#!/bin/bash
+# PDF Splitter launcher – runs via Terminal so pywebview has proper GUI context
+# (direct exec fails when launched from Finder – no TTY / different process environment)
+
+export PATH="/Library/Frameworks/Python.framework/Versions/Current/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_BUNDLE="$(dirname "$(dirname "$SCRIPT_DIR")")"
+PROJECT_ROOT="$(dirname "$APP_BUNDLE")"
+
+# Find python3
+PYTHON=""
+for py in /Library/Frameworks/Python.framework/Versions/*/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+    [ -x "$py" ] && PYTHON="$py" && break
+done
+[ -z "$PYTHON" ] && PYTHON="python3"
+
+# Run in Terminal – pywebview needs a proper TTY/GUI context when launched from Finder
+exec osascript <<APPLESCRIPT
+tell application "Terminal"
+    activate
+    do script "cd \"$PROJECT_ROOT\" && \"$PYTHON\" main.py; exit"
+end tell
+APPLESCRIPT

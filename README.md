@@ -157,6 +157,12 @@ That's it. No build step, no bundling, no Node.js.
 
 ### Launch the app
 
+**Option A: Double-click the app (macOS only)**  
+On Mac, double-click `PDF Splitter.app` in the project folder. A brief Terminal window will appear, then the PDF Splitter window opens.
+
+You can drag `PDF Splitter.app` to your Applications folder or Dock for easy access. The app must stay inside the project folder (it finds `main.py` relative to its location).
+
+**Option B: Terminal (all platforms)**
 ```bash
 python3 main.py
 ```
@@ -205,6 +211,8 @@ You can **cancel** at any time — the app stops after the current operation.
 ```
 PDF Splitter/
 ├── main.py                  # Entry point — launches the app window
+├── PDF Splitter.app         # macOS-only app launcher (double-click to run)
+├── Launch PDF Splitter (Debug).command  # macOS-only; runs in Terminal to show errors
 ├── requirements.txt         # Python dependencies
 ├── README.md                # This file
 ├── backend/
