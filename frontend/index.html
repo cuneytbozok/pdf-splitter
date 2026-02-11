@@ -22,16 +22,98 @@
       <span class="header-subtitle">Split, compress & fix large PDFs</span>
     </header>
 
-    <!-- Drop zone -->
-    <div id="dropZone" class="drop-zone" tabindex="0">
-      <div class="drop-zone-content">
-        <svg class="drop-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="17 8 12 3 7 8"/>
-          <line x1="12" y1="3" x2="12" y2="15"/>
-        </svg>
-        <p class="drop-text">Drag &amp; drop PDF files here</p>
-        <p class="drop-subtext">or <button id="browseBtn" class="link-btn" type="button">browse files</button></p>
+    <!-- Unified input: URLs + Drag & drop -->
+    <div id="addPdfsSection" class="add-pdfs-section">
+      <div class="url-block">
+        <h2 class="url-section-title">Add PDFs</h2>
+        <p class="url-section-hint">Paste one or more PDF URLs, or drag &amp; drop files. Configure settings, select folders, then click <strong>Start Processing</strong>.</p>
+        <textarea id="urlInput" class="url-input" placeholder="Paste PDF URL or URLs (one per line or separated by spaces)" rows="3"></textarea>
+        <div class="url-row">
+          <div class="folder-picker url-folder-picker">
+            <input id="downloadFolder" type="text" readonly placeholder="Download folder for URL files..." />
+            <button id="browseDownloadFolderBtn" class="secondary-btn" type="button">Browse</button>
+          </div>
+          <button id="addUrlsBtn" class="secondary-btn" type="button">Add to queue</button>
+        </div>
+      </div>
+      <div id="dropZone" class="drop-zone" tabindex="0">
+        <div class="drop-zone-content">
+          <svg class="drop-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p class="drop-text">Drag &amp; drop PDF files here</p>
+          <p class="drop-subtext">or <button id="browseBtn" class="link-btn" type="button">browse files</button></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings (shown when items in queue or URLs in input) -->
+    <div id="settingsSection" class="section settings-section hidden">
+      <h2>Settings</h2>
+      <div class="settings-grid">
+        <!-- Row 1: Options (checkboxes, grouped) -->
+        <div class="settings-options-row">
+          <label class="setting-group repair-option" id="repairOptionGroup">
+            <input type="checkbox" id="repairOnly" />
+            <span>Repair only</span>
+          </label>
+          <label class="setting-group repair-option" id="removeImagesGroup">
+            <input type="checkbox" id="removeImages" />
+            <span>Remove images <span class="option-hint">— faster compression, smaller files</span></span>
+          </label>
+        </div>
+
+        <!-- Row 2: Split settings (when not repair only) -->
+        <div class="settings-pair-row">
+          <div class="setting-group" id="splitModeGroup">
+            <label for="splitMode">Split mode</label>
+            <select id="splitMode">
+              <option value="parts">By number of parts</option>
+              <option value="pages">By max pages per file</option>
+              <option value="size">By target file size</option>
+            </select>
+          </div>
+          <div class="setting-group" id="splitValueGroup">
+            <label for="splitValue" id="splitValueLabel">Number of parts</label>
+            <div class="input-with-unit">
+              <input id="splitValue" type="number" min="2" value="4" />
+              <span id="splitValueUnit" class="input-unit">parts</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Row 3: Compression (when not repair only) -->
+        <div class="settings-pair-row">
+          <div class="setting-group" id="compressionGroup">
+            <label for="compression">Compression</label>
+            <select id="compression">
+              <option value="none">None (no compression)</option>
+              <option value="low">High compression (smallest files)</option>
+              <option value="medium" selected>Medium compression (balanced)</option>
+              <option value="high">Low compression (high quality)</option>
+              <option value="maximum">Minimal compression (largest files)</option>
+            </select>
+          </div>
+          <div id="workersGroup" class="setting-group hidden">
+            <label for="compressionWorkers">Compression workers</label>
+            <div class="input-with-unit">
+              <input id="compressionWorkers" type="number" min="1" max="8" value="2" />
+              <span id="workersUnit" class="input-unit">workers (1–8)</span>
+            </div>
+            <p id="ramEstimate" class="setting-hint">Estimated peak RAM: ~1 GB</p>
+          </div>
+        </div>
+
+        <!-- Row 4: Output folder -->
+        <div class="setting-group setting-group-full">
+          <label>Output folder</label>
+          <div class="folder-picker">
+            <input id="outputFolder" type="text" readonly placeholder="Select output folder..." />
+            <button id="browseFolderBtn" class="secondary-btn" type="button">Browse</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -41,78 +123,10 @@
         <h2>Files</h2>
         <button id="clearQueueBtn" class="text-btn" type="button">Clear all</button>
       </div>
-      <ul id="fileQueue" class="file-queue"></ul>
+      <ul id="fileQueue" class="file-queue">    </ul>
       <p class="file-queue-hint" id="fixPdfHint">
         PDFs rejected by NotebookLM, ChatGPT, or other LLMs? Use <strong>Repair only</strong> in Settings to fix formatting without splitting or compressing.
       </p>
-    </div>
-
-    <!-- Settings -->
-    <div id="settingsSection" class="section settings-section hidden">
-      <h2>Settings</h2>
-      <div class="settings-grid">
-        <!-- Repair only -->
-        <label class="setting-group setting-group-full repair-option" id="repairOptionGroup">
-          <input type="checkbox" id="repairOnly" />
-          <span>Repair only</span>
-        </label>
-
-        <!-- Split mode (hidden when repair only) -->
-        <div class="setting-group" id="splitModeGroup">
-          <label for="splitMode">Split mode</label>
-          <select id="splitMode">
-            <option value="parts">By number of parts</option>
-            <option value="pages">By max pages per file</option>
-            <option value="size">By target file size</option>
-          </select>
-        </div>
-
-        <!-- Split value (hidden when repair only) -->
-        <div class="setting-group" id="splitValueGroup">
-          <label for="splitValue" id="splitValueLabel">Number of parts</label>
-          <div class="input-with-unit">
-            <input id="splitValue" type="number" min="2" value="4" />
-            <span id="splitValueUnit" class="input-unit">parts</span>
-          </div>
-        </div>
-
-        <!-- Compression (hidden when repair only) -->
-        <div class="setting-group" id="compressionGroup">
-          <label for="compression">Compression</label>
-          <select id="compression">
-            <option value="none">None (no compression)</option>
-            <option value="low">High compression (smallest files)</option>
-            <option value="medium" selected>Medium compression (balanced)</option>
-            <option value="high">Low compression (high quality)</option>
-            <option value="maximum">Minimal compression (largest files)</option>
-          </select>
-        </div>
-
-        <!-- Remove images -->
-        <label class="setting-group setting-group-full repair-option" id="removeImagesGroup">
-          <input type="checkbox" id="removeImages" />
-          <span>Remove images <span class="option-hint">— faster compression, smaller files</span></span>
-        </label>
-
-        <!-- Compression workers (only relevant when compression is enabled) -->
-        <div id="workersGroup" class="setting-group hidden">
-          <label for="compressionWorkers">Compression workers</label>
-          <div class="input-with-unit">
-            <input id="compressionWorkers" type="number" min="1" max="8" value="2" />
-            <span id="workersUnit" class="input-unit">workers (1–8)</span>
-          </div>
-          <p id="ramEstimate" class="setting-hint">Estimated peak RAM: ~1 GB</p>
-        </div>
-
-        <!-- Output folder -->
-        <div class="setting-group setting-group-full">
-          <label>Output folder</label>
-          <div class="folder-picker">
-            <input id="outputFolder" type="text" readonly placeholder="Select output folder..." />
-            <button id="browseFolderBtn" class="secondary-btn" type="button">Browse</button>
-          </div>
-        </div>
-      </div>
     </div>
 
     <!-- Action buttons -->

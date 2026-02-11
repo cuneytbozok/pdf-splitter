@@ -18,6 +18,7 @@
 const state = {
   files: [],
   outputFolder: "",
+  downloadFolder: "",
   processing: false,
   completedFiles: 0,
   totalFiles: 0,
@@ -29,6 +30,7 @@ const state = {
   totalParts: 0,
   totalPages: 0,
   partProgress: {},  // partIndex -> 0..1 (tmp_size/input_size) during compression
+  completedFileNames: new Set(),  // Basenames of processed files for "open folder" on done items
 };
 
 // ================================================================
@@ -38,6 +40,10 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 const dom = {
+  urlInput: $("#urlInput"),
+  downloadFolder: $("#downloadFolder"),
+  browseDownloadFolderBtn: $("#browseDownloadFolderBtn"),
+  addUrlsBtn: $("#addUrlsBtn"),
   dropZone: $("#dropZone"),
   browseBtn: $("#browseBtn"),
   fileQueueSection: $("#fileQueueSection"),
@@ -117,6 +123,7 @@ waitForApi().then((a) => {
 async function init() {
   setupDragDrop();
   setupBrowse();
+  setupUrlSection();
   setupSettings();
   setupActions();
   setupGlobalCallbacks();
@@ -135,6 +142,7 @@ async function init() {
     );
     disableCompression();
   }
+  updateUI();
 }
 
 // ================================================================
@@ -194,6 +202,23 @@ function setupBrowse() {
 
   dom.browseFolderBtn.addEventListener("click", openFolderPicker);
   dom.outputFolder.addEventListener("click", openFolderPicker);
+  dom.browseDownloadFolderBtn.addEventListener("click", openDownloadFolderPicker);
+  dom.downloadFolder.addEventListener("click", openDownloadFolderPicker);
+}
+
+async function openDownloadFolderPicker() {
+  if (!api) return;
+  try {
+    const folder = await api.select_download_folder();
+    if (folder) {
+      state.downloadFolder = folder;
+      dom.downloadFolder.value = folder;
+      updateUI();
+    }
+  } catch (err) {
+    const msg = err?.message || String(err) || "Failed to open folder picker.";
+    showToast(msg, "error");
+  }
 }
 
 async function openFilePicker() {
@@ -201,8 +226,19 @@ async function openFilePicker() {
   try {
     const infos = await api.select_files();
     if (infos && infos.length > 0) {
+      const added = [];
       for (const info of infos) {
+        const isNew = !state.files.some((f) => f.type === "file" && f.path === info.path);
+        if (isNew) added.push({ type: "file", path: info.path });
         addFile(info);
+      }
+      if (added.length > 0 && state.processing) {
+        try {
+          api.add_items_to_current_run(JSON.stringify(added));
+          state.totalFiles = state.files.length;
+        } catch (err) {
+          showToast("Could not add to current run.", "warning");
+        }
       }
       updateUI();
     }
@@ -218,11 +254,52 @@ async function openFolderPicker() {
     if (folder) {
       state.outputFolder = folder;
       dom.outputFolder.value = folder;
-      validateStart();
+      updateUI();
     }
   } catch (err) {
-    showToast("Failed to open folder picker.", "error");
+    const msg = err?.message || String(err) || "Failed to open folder picker.";
+    showToast(msg, "error");
   }
+}
+
+// ================================================================
+// URL Section
+// ================================================================
+
+function setupUrlSection() {
+  if (dom.addUrlsBtn) {
+    dom.addUrlsBtn.addEventListener("click", addUrlsToQueue);
+  }
+  dom.urlInput.addEventListener("input", updateUI);
+  dom.urlInput.addEventListener("paste", () => {
+    setTimeout(updateUI, 150);
+    setTimeout(updateUI, 300);
+  });
+  dom.urlInput.addEventListener("change", updateUI);
+  dom.urlInput.addEventListener("keyup", updateUI);
+  dom.urlInput.addEventListener("focus", () => {
+    if ((dom.urlInput?.value?.trim() || "").length > 0) updateUI();
+  });
+}
+
+function parseUrlsFromText(text) {
+  const raw = text
+    .split(/[\s\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const urls = raw.filter((s) => /^https?:\/\//i.test(s));
+  return [...new Set(urls)];
+}
+
+function formatBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function hasUrls() {
+  const text = dom.urlInput?.value?.trim() || "";
+  return parseUrlsFromText(text).length > 0;
 }
 
 // ================================================================
@@ -230,18 +307,61 @@ async function openFolderPicker() {
 // ================================================================
 
 function addFile(info) {
-  // Deduplicate by path
-  if (state.files.some((f) => f.path === info.path)) return;
-  state.files.push(info);
+  if (!info.path) return;
+  if (state.files.some((f) => f.type === "file" && f.path === info.path)) return;
+  state.files.push({ type: "file", ...info });
 }
 
-function removeFile(path) {
-  state.files = state.files.filter((f) => f.path !== path);
+function urlDisplayName(url) {
+  try {
+    const u = new URL(url);
+    const name = decodeURIComponent((u.pathname || "").split("/").pop() || "document.pdf");
+    return name.toLowerCase().endsWith(".pdf") ? name : name + ".pdf";
+  } catch {
+    return "document.pdf";
+  }
+}
+
+function addUrlsToQueue() {
+  const text = dom.urlInput?.value?.trim() || "";
+  const urls = parseUrlsFromText(text);
+  if (urls.length === 0) {
+    showToast("No valid URLs. Enter http or https URLs, separated by spaces or new lines.", "warning");
+    return;
+  }
+  const existingUrls = new Set(state.files.filter((f) => f.type === "url").map((f) => f.url));
+  const added = [];
+  for (const url of urls) {
+    if (!existingUrls.has(url)) {
+      existingUrls.add(url);
+      state.files.push({ type: "url", url, name: urlDisplayName(url) });
+      added.push({ type: "url", url });
+    }
+  }
+  if (added.length > 0 && state.processing && api) {
+    try {
+      api.add_items_to_current_run(JSON.stringify(added));
+      state.totalFiles = state.files.length;
+    } catch (err) {
+      showToast("Could not add to current run.", "warning");
+    }
+  }
+  dom.urlInput.value = "";
+  updateUI();
+}
+
+function removeQueueItem(item) {
+  if (item.type === "file") {
+    state.files = state.files.filter((f) => !(f.type === "file" && f.path === item.path));
+  } else {
+    state.files = state.files.filter((f) => !(f.type === "url" && f.url === item.url));
+  }
   updateUI();
 }
 
 function clearQueue() {
   state.files = [];
+  state.completedFileNames.clear();
   updateUI();
 }
 
@@ -309,7 +429,7 @@ function updateRamEstimate() {
 function computeMaxWorkers() {
   const mode = dom.splitMode.value;
   const splitVal = Math.max(0, parseInt(dom.splitValue.value, 10) || 0);
-  const files = state.files.filter((f) => f.status !== "error");
+  const files = state.files.filter((f) => f.type === "file" && f.status !== "error");
 
   if (mode === "parts") {
     return Math.min(8, Math.max(1, splitVal));
@@ -396,33 +516,70 @@ function setupActions() {
 }
 
 function validateStart() {
-  const hasFiles = state.files.length > 0;
+  const hasItems = state.files.length > 0;
   const hasOutput = state.outputFolder.length > 0;
+  const hasUrlItems = state.files.some((f) => f.type === "url");
+  const hasDownloadFolder = !!(state.downloadFolder || state.outputFolder);
   const repair = dom.repairOnly?.checked ?? false;
   const hasValue = repair || parseInt(dom.splitValue?.value) > 0;
-  dom.startBtn.disabled = !(hasFiles && hasOutput && hasValue);
+  dom.startBtn.disabled = !(
+    hasItems &&
+    hasOutput &&
+    hasValue &&
+    (!hasUrlItems || hasDownloadFolder)
+  );
+  if (dom.addUrlsBtn) {
+    const urlsPresent = parseUrlsFromText(dom.urlInput?.value?.trim() || "").length > 0;
+    dom.addUrlsBtn.disabled = !(urlsPresent && hasDownloadFolder);
+  }
 }
 
 async function startProcessing() {
   if (!api || state.processing) return;
 
-  // Filter out files that had errors during analysis
-  const validFiles = state.files.filter((f) => f.status !== "error");
-  if (validFiles.length === 0) {
-    showToast("No valid PDF files to process. Remove errored files and try again.", "error");
+  const validFiles = state.files.filter((f) => f.type === "file" && f.status !== "error");
+  const validUrlItems = state.files.filter((f) => f.type === "url");
+  const hasValidItems = validFiles.length > 0 || validUrlItems.length > 0;
+
+  if (!hasValidItems) {
+    showToast("No valid files or URLs to process. Remove errored items and try again.", "error");
     return;
   }
-  if (validFiles.length < state.files.length) {
+  if (validFiles.length < state.files.filter((f) => f.type === "file").length) {
     showToast(
-      `Skipping ${state.files.length - validFiles.length} file(s) with errors.`,
+      `Skipping ${state.files.filter((f) => f.type === "file").length - validFiles.length} file(s) with errors.`,
       "warning"
     );
   }
 
   const repairOnly = dom.repairOnly.checked;
 
+  if (!repairOnly && validFiles.length > 0 && dom.splitMode.value === "parts") {
+    const splitValue = parseInt(dom.splitValue.value) || 4;
+    const minPages = Math.min(...validFiles.map((f) => f.pages));
+    if (splitValue > minPages) {
+      showToast(
+        `Cannot split into ${splitValue} parts — one of your files has only ${minPages} pages.`,
+        "error"
+      );
+      return;
+    }
+  }
+
+  const items = state.files
+    .filter((f) => (f.type === "file" && f.status !== "error") || f.type === "url")
+    .map((f) => (f.type === "url" ? { type: "url", url: f.url } : { type: "file", path: f.path }));
+
+  let downloadFolder = state.downloadFolder || state.outputFolder;
+  if (validUrlItems.length > 0 && !downloadFolder) {
+    showToast("Select a download folder for URL items.", "warning");
+    return;
+  }
+
   const config = {
-    files: validFiles.map((f) => f.path),
+    items,
+    downloadFolder: downloadFolder || "",
+    outputFolder: state.outputFolder,
     splitMode: repairOnly ? "parts" : dom.splitMode.value,
     splitValue: repairOnly ? 1 : parseInt(dom.splitValue.value),
     compression: repairOnly ? "none" : dom.compression.value,
@@ -431,23 +588,8 @@ async function startProcessing() {
       parseInt(dom.compressionWorkers.max, 10) || 8,
       Math.max(1, parseInt(dom.compressionWorkers.value) || 2)
     ),
-    outputFolder: state.outputFolder,
     removeImages: dom.removeImages?.checked ?? false,
   };
-
-  if (!repairOnly) {
-    const splitValue = config.splitValue;
-    if (dom.splitMode.value === "parts") {
-      const minPages = Math.min(...validFiles.map((f) => f.pages));
-      if (splitValue > minPages) {
-        showToast(
-          `Cannot split into ${splitValue} parts — one of your files has only ${minPages} pages.`,
-          "error"
-        );
-        return;
-      }
-    }
-  }
 
   state.processing = true;
   state.repairOnly = repairOnly;
@@ -456,23 +598,20 @@ async function startProcessing() {
   state.partsStarted = [];
   state.partsCompleted = 0;
   state.completedFiles = 0;
-  state.totalFiles = state.files.length;
+  state.totalFiles = items.length;
 
-  // Show progress, hide others
   dom.startBtn.classList.add("hidden");
   dom.cancelBtn.classList.remove("hidden");
   dom.progressSection.classList.remove("hidden");
   dom.completeSection.classList.add("hidden");
 
-  // Disable settings
   setSettingsEnabled(false);
 
-  // Reset progress UI
   updateProgressUI(0, 1, 0, 1, "Starting...", 0);
   updateOverallUI(0, state.totalFiles);
 
   try {
-    await api.start_processing(JSON.stringify(config));
+    await api.start_unified_processing(JSON.stringify(config));
   } catch (err) {
     showToast(`Failed to start processing: ${err}`, "error");
     resetProcessingUI();
@@ -483,6 +622,7 @@ async function cancelProcessing() {
   if (!api) return;
   try {
     await api.cancel_processing();
+    await api.cancel_downloads();
     showToast("Cancelling... please wait.", "warning");
   } catch (err) {
     showToast("Failed to cancel.", "error");
@@ -527,12 +667,13 @@ function setupGlobalCallbacks() {
 
   window.__onFileComplete = (data) => {
     state.completedFiles++;
+    state.completedFileNames.add(data.filename);
     state.partsStarted = [];
     state.partsCompleted = 0;
     state.partProgress = {};
     updateWorkersUI();
     updateOverallUI(state.completedFiles, state.totalFiles, 0);
-    markFileComplete(data.filename);
+    renderFileQueue();
   };
 
   window.__onCompressProgress = (data) => {
@@ -593,6 +734,25 @@ function setupGlobalCallbacks() {
     dom.startBtn.classList.remove("hidden");
     dom.startBtn.disabled = true;
     setSettingsEnabled(true);
+    validateStart();
+  };
+
+  window.__onPhaseProgress = (data) => {
+    if (!data) return;
+    if (data.phase === "download") {
+      dom.progressFileLabel.textContent = `Downloading ${data.currentFile} of ${data.totalFiles}: ${data.filename || "..."}`;
+      const pct = data.percent >= 0 ? data.percent : 0;
+      dom.progressBarFile.style.width = pct + "%";
+      dom.progressPercent.textContent = pct + "%";
+      if (data.totalBytes >= 0) {
+        dom.progressDetail.textContent = `${formatBytes(data.bytesReceived)} / ${formatBytes(data.totalBytes)}`;
+      } else {
+        dom.progressDetail.textContent = formatBytes(data.bytesReceived || 0);
+      }
+      dom.progressPages.textContent = "";
+    } else if (data.phase === "process") {
+      dom.progressFileLabel.textContent = `Processing ${data.currentFile} of ${data.totalFiles}: ${data.filename || "..."}`;
+    }
   };
 
   window.__onError = (message) => {
@@ -602,11 +762,23 @@ function setupGlobalCallbacks() {
   // Native drag-and-drop handler (called from Python via evaluate_js)
   window.__onNativeFilesDropped = (infos) => {
     if (!infos || infos.length === 0) return;
+    const added = [];
     for (const info of infos) {
+      const isNew = !state.files.some((f) => f.type === "file" && f.path === info.path);
+      if (isNew) added.push({ type: "file", path: info.path });
       addFile(info);
+    }
+    if (added.length > 0 && state.processing && api) {
+      try {
+        api.add_items_to_current_run(JSON.stringify(added));
+        state.totalFiles = state.files.length;
+      } catch (err) {
+        showToast("Could not add to current run.", "warning");
+      }
     }
     updateUI();
   };
+
 }
 
 // ================================================================
@@ -615,58 +787,98 @@ function setupGlobalCallbacks() {
 
 function updateUI() {
   renderFileQueue();
-
-  const hasFiles = state.files.length > 0;
-  dom.fileQueueSection.classList.toggle("hidden", !hasFiles);
-  dom.settingsSection.classList.toggle("hidden", !hasFiles);
-  dom.actionSection.classList.toggle("hidden", !hasFiles);
-
+  updateVisibilityFromState();
   validateStart();
   updateWorkersCap();
 }
 
-function renderFileQueue() {
-  dom.fileQueue.innerHTML = "";
-  for (const file of state.files) {
-    const li = document.createElement("li");
-    li.className = "file-item";
-    li.innerHTML = `
-      <div class="file-item-icon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/>
-        </svg>
-      </div>
-      <div class="file-item-info">
-        <div class="file-item-name" title="${escapeHtml(file.path)}">${escapeHtml(file.name)}</div>
-        <div class="file-item-meta">${file.pages.toLocaleString()} pages &middot; ${file.size_human}</div>
-      </div>
-      <span class="file-item-status ${file.status}">${statusLabel(file.status)}</span>
-      <button class="file-item-remove" title="Remove" data-path="${escapeHtml(file.path)}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="18" y1="6" x2="6" y2="18"/>
-          <line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
-    `;
-    li.querySelector(".file-item-remove").addEventListener("click", () => {
-      removeFile(file.path);
-    });
-    dom.fileQueue.appendChild(li);
+function updateVisibilityFromState() {
+  const hasFiles = state.files.length > 0;
+  const urlsPresent = hasUrls();
+  const showSettings = hasFiles || urlsPresent || state.processing;
+  const showActionSection = hasFiles || urlsPresent || state.processing;
+
+  const wasSettingsHidden = dom.settingsSection.classList.contains("hidden");
+  dom.fileQueueSection.classList.toggle("hidden", !hasFiles);
+  dom.settingsSection.classList.toggle("hidden", !showSettings);
+  dom.actionSection.classList.toggle("hidden", !showActionSection);
+
+  if (wasSettingsHidden && showSettings && dom.settingsSection) {
+    dom.settingsSection.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 }
 
-function markFileComplete(filename) {
-  const items = dom.fileQueue.querySelectorAll(".file-item");
-  for (const item of items) {
-    const nameEl = item.querySelector(".file-item-name");
-    if (nameEl && nameEl.textContent === filename) {
-      const statusEl = item.querySelector(".file-item-status");
-      if (statusEl) {
-        statusEl.className = "file-item-status ok";
-        statusEl.textContent = "Done";
-      }
+function renderFileQueue() {
+  dom.fileQueue.innerHTML = "";
+  for (const item of state.files) {
+    const isDone = state.completedFileNames.has(item.name);
+    const statusText = isDone ? "Done" : (item.type === "url" ? "URL" : statusLabel(item.status));
+    const statusClass = isDone ? "ok" : (item.type === "url" ? "pending" : item.status);
+    const folderBtn = isDone && state.outputFolder
+      ? `<button class="file-item-open-folder" title="Open output folder">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            <polyline points="2 12 5 12 7 8 22 8"/>
+          </svg>
+        </button>`
+      : "";
+    const li = document.createElement("li");
+    li.className = "file-item";
+    if (item.type === "url") {
+      li.innerHTML = `
+        <div class="file-item-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+        </div>
+        <div class="file-item-info">
+          <div class="file-item-name" title="${escapeHtml(item.url)}">${escapeHtml(item.name)}</div>
+          <div class="file-item-meta">${isDone ? "Processed" : "Pending download"}</div>
+        </div>
+        <span class="file-item-status ${statusClass}">${statusText}</span>
+        ${folderBtn}
+        <button class="file-item-remove" title="Remove" data-url="${escapeHtml(item.url)}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      `;
+    } else {
+      li.innerHTML = `
+        <div class="file-item-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+        </div>
+        <div class="file-item-info">
+          <div class="file-item-name" title="${escapeHtml(item.path)}">${escapeHtml(item.name)}</div>
+          <div class="file-item-meta">${item.pages.toLocaleString()} pages &middot; ${item.size_human}</div>
+        </div>
+        <span class="file-item-status ${statusClass}">${statusText}</span>
+        ${folderBtn}
+        <button class="file-item-remove" title="Remove" data-path="${escapeHtml(item.path)}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      `;
     }
+    li.querySelector(".file-item-remove").addEventListener("click", () => removeQueueItem(item));
+    const folderEl = li.querySelector(".file-item-open-folder");
+    if (folderEl && api && state.outputFolder) {
+      folderEl.addEventListener("click", () => {
+        try {
+          api.open_folder(state.outputFolder);
+        } catch (err) {
+          showToast("Could not open folder.", "error");
+        }
+      });
+    }
+    dom.fileQueue.appendChild(li);
   }
 }
 
@@ -804,8 +1016,13 @@ function setSettingsEnabled(enabled) {
   dom.compression.disabled = !enabled || !state.gsAvailable;
   dom.compressionWorkers.disabled = !enabled;
   dom.browseFolderBtn.disabled = !enabled;
-  dom.dropZone.style.pointerEvents = enabled ? "auto" : "none";
-  dom.dropZone.style.opacity = enabled ? "1" : "0.5";
+  // Keep URL input, drop zone, and add-to-queue enabled during processing so user can queue more for next run
+  dom.dropZone.style.pointerEvents = "auto";
+  dom.dropZone.style.opacity = "1";
+  dom.urlInput.disabled = false;
+  if (dom.addUrlsBtn) dom.addUrlsBtn.disabled = !(parseUrlsFromText(dom.urlInput?.value?.trim() || "").length > 0 && (state.downloadFolder || state.outputFolder));
+  dom.browseDownloadFolderBtn.disabled = false;
+  dom.downloadFolder.style.pointerEvents = "auto";
 }
 
 function resetProcessingUI() {
@@ -820,6 +1037,7 @@ function resetProcessingUI() {
 function resetApp() {
   state.files = [];
   state.outputFolder = "";
+  state.completedFileNames.clear();
   state.processing = false;
   state.completedFiles = 0;
   state.totalFiles = 0;
@@ -870,6 +1088,8 @@ function statusLabel(status) {
       return "Needs repair";
     case "error":
       return "Error";
+    case "pending":
+      return "URL";
     default:
       return status;
   }

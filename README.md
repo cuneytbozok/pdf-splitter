@@ -12,6 +12,18 @@ A local desktop app for splitting large PDF files into smaller parts. Built for 
 - **Repair only** — Fix PDF formatting without splitting or compressing (for PDFs rejected by NotebookLM, ChatGPT, etc.)
 - **Remove images** — Strip images for faster compression and smaller files
 - **Preserves** content — text, images, formatting all carry over to each split part
+- **Add from URL** — Download PDFs from http/https URLs, then split or repair them
+- **Unified queue** — Mix local files and URLs in one queue; one **Start Processing** handles everything
+- **Add during processing** — You can add more URLs or files to the queue while a run is in progress; they are included in the current run
+- **Open output folder** — Click the folder icon next to completed items to open the output directory in your file manager
+
+### Add PDFs (URLs or drag & drop)
+
+The input area has two panels side by side: **paste URLs** on the left, **drag & drop** on the right. Both feed into a single queue.
+
+- **URLs** — Paste one or more PDF URLs (one per line or separated by spaces). Select a **download folder** for URL files, then click **Add to queue** to add them to the queue. URLs are downloaded when processing starts.
+- **Local files** — Drag and drop PDFs or click to browse. Files are added to the queue immediately.
+- **Start Processing** — Configure settings (split mode, compression, output folder), then click **Start Processing**. The app downloads any URL items first, then processes everything (local + downloaded) in order. One action for all items.
 
 ### Repair only
 
@@ -70,14 +82,14 @@ The app runs as a native desktop window (not a browser tab) powered by:
 
 ### Processing Flow
 
-1. You drop or browse for PDF files
-2. The app analyzes each file (page count, size, health check)
-3. You configure split mode, value, compression, and output folder
-4. Click Start — the app splits pages file by file with real-time progress
-5. If compression is enabled, each output part is compressed (in parallel when workers > 1)
-6. Output files are saved to your chosen folder as `filename_part_1.pdf`, `filename_part_2.pdf`, etc. (or `filename_repaired.pdf` when using Repair only)
+1. Add PDFs — Paste URLs (click **Add to queue**) or drag & drop / browse local files. All go into one queue.
+2. The app analyzes local files (page count, size, health check). URL items show as "Pending download".
+3. Configure split mode, value, compression, output folder, and download folder (for URLs).
+4. Click **Start Processing** — The app downloads any URL items, then processes all items in queue order (split or repair, then compress if enabled).
+5. Output files are saved to your chosen folder as `filename_part_1.pdf`, `filename_part_2.pdf`, etc. (or `filename_repaired.pdf` when using Repair only).
+6. Click the folder icon next to completed items to open the output folder in your file manager.
 
-All processing happens locally on your machine. No files are uploaded anywhere.
+You can add more URLs or files during a run; they are processed as part of the current run. All processing happens locally. No files are uploaded anywhere.
 
 ---
 
@@ -135,6 +147,7 @@ pip3 install -r requirements.txt
 This installs:
 - `pikepdf` — PDF manipulation
 - `pywebview` — Native desktop window
+- `requests` — URL downloads with progress
 
 That's it. No build step, no bundling, no Node.js.
 
@@ -160,31 +173,30 @@ python3 main.py --debug
 
 ### Step-by-step
 
-1. **Add files** — Drag and drop PDF files onto the drop zone, or click it to browse. Drag-and-drop uses native OS support, so it works on macOS, Windows, and Linux. You can add multiple files.
+1. **Add files** — Paste PDF URLs in the URL field (select download folder, then click **Add to queue**), or drag & drop / browse local files. Both methods add to the same queue. You can mix URLs and local files.
 
-2. **Review the queue** — Each file shows its page count, size, and health status:
-   - **Ready** — File is healthy and ready to process
-   - **Needs repair** — File has issues but can be auto-repaired (requires Ghostscript)
-   - **Error** — File cannot be opened (will be skipped during processing)
+2. **Review the queue** — Each item shows:
+   - **Local files**: page count, size, and health status (Ready, Needs repair, or Error)
+   - **URL items**: "Pending download" until processed
 
 3. **Configure settings**:
-   - **Repair only** — When enabled, fixes PDF formatting without splitting or compressing (hides split/compression options). Output: `filename_repaired.pdf`.
-   - **Split mode** — Choose how you want to split (by parts, by max pages, or by target size)
-   - **Value** — Enter the number of parts, max pages per file, or target size in MB
-   - **Compression** — Pick a preset or choose "None" to skip compression
-   - **Remove images** — Strip images for smaller files and faster compression
-   - **Compression workers** — When compression is on, choose 1 to N (N is limited by the number of parts for your current split mode and files; max 8). More workers run compression in parallel and use more RAM (~500 MB per worker). The app shows estimated peak RAM.
-   - **Output folder** — Click Browse to select where output files are saved
+   - **Download folder** — Where URL files are saved before processing (required if queue has URLs)
+   - **Output folder** — Where split/repaired files are saved
+   - **Repair only** — When enabled, fixes PDF formatting without splitting or compressing. Output: `filename_repaired.pdf`.
+   - **Split mode** — By parts, by max pages, or by target file size
+   - **Value** — Number of parts, max pages per file, or target size in MB
+   - **Compression** — Preset or "None"
+   - **Remove images** — Strip images for smaller files
+   - **Compression workers** — 1–8 workers for parallel compression (max capped by number of parts)
 
-4. **Start processing** — Click the Start button. You'll see:
-   - Per-file progress bar (page-based during split; estimated during compression)
-   - Worker status when using multiple compression workers
+4. **Start processing** — Click **Start Processing**. URL items download first, then all items are processed in order. You can add more URLs or files during the run — they join the current run. Progress shows:
+   - Download progress (for URL items)
+   - Per-file split/compress progress
    - Overall progress across all files
-   - Status messages for each phase (splitting, compressing)
 
-5. **Done** — A summary shows how many files were split, how many parts were created, and the total time elapsed. Click "Process More Files" to start again.
+5. **Done** — Summary shows files split, parts created, and time elapsed. Click the **folder icon** next to completed items to open the output folder. Click "Process More Files" to start again.
 
-You can **cancel** at any time — the app stops after the current operation (page split or compression run) and cleans up.
+You can **cancel** at any time — the app stops after the current operation.
 
 ---
 
@@ -200,7 +212,8 @@ PDF Splitter/
 │   ├── api.py               # Bridge between frontend JS and Python backend
 │   ├── splitter.py          # Core splitting engine (3 modes, progress callbacks)
 │   ├── compressor.py        # Ghostscript compression wrapper (4 presets)
-│   └── analyzer.py          # PDF metadata reader (page count, size, health)
+│   ├── analyzer.py          # PDF metadata reader (page count, size, health)
+│   └── downloader.py        # URL download with streaming and progress
 ├── frontend/
 │   ├── index.html           # App layout
 │   ├── css/
