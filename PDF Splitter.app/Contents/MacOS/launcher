@@ -16,9 +16,11 @@ done
 [ -z "$PYTHON" ] && PYTHON="python3"
 
 # Run in Terminal – pywebview needs a proper TTY/GUI context when launched from Finder
+# Use "in window 1" to avoid opening two windows (activate creates one, do script would create another)
 exec osascript <<APPLESCRIPT
 tell application "Terminal"
+    if not (exists window 1) then reopen
     activate
-    do script "cd \"$PROJECT_ROOT\" && \"$PYTHON\" main.py; exit"
+    do script "cd \"$PROJECT_ROOT\" && \"$PYTHON\" main.py; exit" in window 1
 end tell
 APPLESCRIPT
