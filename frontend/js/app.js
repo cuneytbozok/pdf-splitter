@@ -43,6 +43,13 @@ const dom = {
   fileQueueSection: $("#fileQueueSection"),
   fileQueue: $("#fileQueue"),
   clearQueueBtn: $("#clearQueueBtn"),
+  repairOnly: $("#repairOnly"),
+  repairOptionGroup: $("#repairOptionGroup"),
+  removeImages: $("#removeImages"),
+  removeImagesGroup: $("#removeImagesGroup"),
+  splitModeGroup: $("#splitModeGroup"),
+  splitValueGroup: $("#splitValueGroup"),
+  compressionGroup: $("#compressionGroup"),
   settingsSection: $("#settingsSection"),
   splitMode: $("#splitMode"),
   splitValue: $("#splitValue"),
@@ -245,6 +252,7 @@ function clearQueue() {
 const RAM_PER_WORKER_GB = 0.5; // ~500 MB per worker
 
 function setupSettings() {
+  dom.repairOnly.addEventListener("change", updateRepairMode);
   dom.splitMode.addEventListener("change", updateSplitModeUI);
   dom.splitValue.addEventListener("input", validateStart);
   dom.clearQueueBtn.addEventListener("click", clearQueue);
@@ -260,14 +268,29 @@ function setupSettings() {
     validateStart();
     updateWorkersCap();
   });
+  updateRepairMode();
   updateSplitModeUI();
   updateWorkersVisibility();
   updateWorkersCap();
 }
 
+function updateRepairMode() {
+  const repair = dom.repairOnly.checked;
+  dom.splitModeGroup.classList.toggle("hidden", repair);
+  dom.splitValueGroup.classList.toggle("hidden", repair);
+  dom.compressionGroup.classList.toggle("hidden", repair);
+  if (repair) {
+    dom.workersGroup.classList.add("hidden");
+  } else {
+    updateWorkersVisibility();
+  }
+  validateStart();
+}
+
 function updateWorkersVisibility() {
   const hasCompression = dom.compression.value !== "none";
-  dom.workersGroup.classList.toggle("hidden", !hasCompression);
+  const repair = dom.repairOnly.checked;
+  dom.workersGroup.classList.toggle("hidden", !hasCompression || repair);
   if (hasCompression) updateWorkersCap();
 }
 
@@ -375,7 +398,8 @@ function setupActions() {
 function validateStart() {
   const hasFiles = state.files.length > 0;
   const hasOutput = state.outputFolder.length > 0;
-  const hasValue = parseInt(dom.splitValue.value) > 0;
+  const repair = dom.repairOnly?.checked ?? false;
+  const hasValue = repair || parseInt(dom.splitValue?.value) > 0;
   dom.startBtn.disabled = !(hasFiles && hasOutput && hasValue);
 }
 
@@ -395,34 +419,40 @@ async function startProcessing() {
     );
   }
 
-  // Validate split value makes sense
-  const splitValue = parseInt(dom.splitValue.value);
-  if (dom.splitMode.value === "parts") {
-    const minPages = Math.min(...validFiles.map((f) => f.pages));
-    if (splitValue > minPages) {
-      showToast(
-        `Cannot split into ${splitValue} parts — one of your files has only ${minPages} pages.`,
-        "error"
-      );
-      return;
-    }
-  }
-
-  const maxWorkers = parseInt(dom.compressionWorkers.max, 10) || 8;
-  const workers = Math.min(maxWorkers, Math.max(1, parseInt(dom.compressionWorkers.value) || 2));
+  const repairOnly = dom.repairOnly.checked;
 
   const config = {
     files: validFiles.map((f) => f.path),
-    splitMode: dom.splitMode.value,
-    splitValue: splitValue,
-    compression: dom.compression.value,
-    workers: workers,
+    splitMode: repairOnly ? "parts" : dom.splitMode.value,
+    splitValue: repairOnly ? 1 : parseInt(dom.splitValue.value),
+    compression: repairOnly ? "none" : dom.compression.value,
+    repairOnly,
+    workers: repairOnly ? 1 : Math.min(
+      parseInt(dom.compressionWorkers.max, 10) || 8,
+      Math.max(1, parseInt(dom.compressionWorkers.value) || 2)
+    ),
     outputFolder: state.outputFolder,
+    removeImages: dom.removeImages?.checked ?? false,
   };
 
+  if (!repairOnly) {
+    const splitValue = config.splitValue;
+    if (dom.splitMode.value === "parts") {
+      const minPages = Math.min(...validFiles.map((f) => f.pages));
+      if (splitValue > minPages) {
+        showToast(
+          `Cannot split into ${splitValue} parts — one of your files has only ${minPages} pages.`,
+          "error"
+        );
+        return;
+      }
+    }
+  }
+
   state.processing = true;
-  state.compressionWorkers = workers;
-  state.compressionEnabled = dom.compression.value !== "none";
+  state.repairOnly = repairOnly;
+  state.compressionWorkers = config.workers;
+  state.compressionEnabled = config.compression !== "none";
   state.partsStarted = [];
   state.partsCompleted = 0;
   state.completedFiles = 0;
@@ -551,9 +581,10 @@ function setupGlobalCallbacks() {
         `(${summary.totalParts} parts) in ${summary.elapsedSeconds}s before cancellation.`;
     } else {
       dom.completeTitle.textContent = "Processing Complete";
-      dom.completeSummary.textContent =
-        `Successfully split ${summary.completedFiles} file${summary.completedFiles !== 1 ? "s" : ""} ` +
-        `into ${summary.totalParts} parts in ${summary.elapsedSeconds}s.`;
+      dom.completeSummary.textContent = state.repairOnly
+        ? `Repaired ${summary.completedFiles} file${summary.completedFiles !== 1 ? "s" : ""} in ${summary.elapsedSeconds}s.`
+        : `Successfully split ${summary.completedFiles} file${summary.completedFiles !== 1 ? "s" : ""} ` +
+          `into ${summary.totalParts} parts in ${summary.elapsedSeconds}s.`;
     }
 
     dom.progressSection.classList.add("hidden");
@@ -765,6 +796,8 @@ function updateOverallUI(completed, total, fileProgress = 0) {
 }
 
 function setSettingsEnabled(enabled) {
+  dom.repairOnly.disabled = !enabled;
+  dom.removeImages.disabled = !enabled;
   dom.splitMode.disabled = !enabled;
   dom.splitValue.disabled = !enabled;
   // Keep compression disabled if GS is not available

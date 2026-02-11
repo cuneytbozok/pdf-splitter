@@ -9,7 +9,22 @@ A local desktop app for splitting large PDF files into smaller parts. Built for 
 - **Splits** large PDFs into multiple smaller files using three flexible modes
 - **Compresses** output files using Ghostscript to reduce size further
 - **Repairs** problematic PDFs automatically (malformed objects, circular references)
+- **Repair only** — Fix PDF formatting without splitting or compressing (for PDFs rejected by NotebookLM, ChatGPT, etc.)
+- **Remove images** — Strip images for faster compression and smaller files
 - **Preserves** content — text, images, formatting all carry over to each split part
+
+### Repair only
+
+When a PDF is rejected by AI tools (NotebookLM, ChatGPT Projects, Claude, etc.) due to formatting errors, use **Repair only** in Settings. It rewrites the PDF in place — no split, no compression. Output files are saved as `filename_repaired.pdf` instead of `filename_part_1.pdf`. Works without Ghostscript.
+
+### Remove images
+
+Enable **Remove images** to strip all image XObjects from the PDF. This results in:
+- **Smaller files** — Images often account for most of a PDF’s size
+- **Faster compression** — Less data for Ghostscript to process when compression is enabled
+- **Text-only output** — Useful when you only need the text for LLM ingestion
+
+Can be combined with any split mode or Repair only.
 
 ### Split Modes
 
@@ -60,7 +75,7 @@ The app runs as a native desktop window (not a browser tab) powered by:
 3. You configure split mode, value, compression, and output folder
 4. Click Start — the app splits pages file by file with real-time progress
 5. If compression is enabled, each output part is compressed (in parallel when workers > 1)
-6. Output files are saved to your chosen folder as `filename_part_1.pdf`, `filename_part_2.pdf`, etc.
+6. Output files are saved to your chosen folder as `filename_part_1.pdf`, `filename_part_2.pdf`, etc. (or `filename_repaired.pdf` when using Repair only)
 
 All processing happens locally on your machine. No files are uploaded anywhere.
 
@@ -153,9 +168,11 @@ python3 main.py --debug
    - **Error** — File cannot be opened (will be skipped during processing)
 
 3. **Configure settings**:
+   - **Repair only** — When enabled, fixes PDF formatting without splitting or compressing (hides split/compression options). Output: `filename_repaired.pdf`.
    - **Split mode** — Choose how you want to split (by parts, by max pages, or by target size)
    - **Value** — Enter the number of parts, max pages per file, or target size in MB
    - **Compression** — Pick a preset or choose "None" to skip compression
+   - **Remove images** — Strip images for smaller files and faster compression
    - **Compression workers** — When compression is on, choose 1 to N (N is limited by the number of parts for your current split mode and files; max 8). More workers run compression in parallel and use more RAM (~500 MB per worker). The app shows estimated peak RAM.
    - **Output folder** — Click Browse to select where output files are saved
 

@@ -42,14 +42,23 @@
         <button id="clearQueueBtn" class="text-btn" type="button">Clear all</button>
       </div>
       <ul id="fileQueue" class="file-queue"></ul>
+      <p class="file-queue-hint" id="fixPdfHint">
+        PDFs rejected by NotebookLM, ChatGPT, or other LLMs? Use <strong>Repair only</strong> in Settings to fix formatting without splitting or compressing.
+      </p>
     </div>
 
     <!-- Settings -->
     <div id="settingsSection" class="section settings-section hidden">
       <h2>Settings</h2>
       <div class="settings-grid">
-        <!-- Split mode -->
-        <div class="setting-group">
+        <!-- Repair only -->
+        <label class="setting-group setting-group-full repair-option" id="repairOptionGroup">
+          <input type="checkbox" id="repairOnly" />
+          <span>Repair only</span>
+        </label>
+
+        <!-- Split mode (hidden when repair only) -->
+        <div class="setting-group" id="splitModeGroup">
           <label for="splitMode">Split mode</label>
           <select id="splitMode">
             <option value="parts">By number of parts</option>
@@ -58,8 +67,8 @@
           </select>
         </div>
 
-        <!-- Split value -->
-        <div class="setting-group">
+        <!-- Split value (hidden when repair only) -->
+        <div class="setting-group" id="splitValueGroup">
           <label for="splitValue" id="splitValueLabel">Number of parts</label>
           <div class="input-with-unit">
             <input id="splitValue" type="number" min="2" value="4" />
@@ -67,8 +76,8 @@
           </div>
         </div>
 
-        <!-- Compression -->
-        <div class="setting-group">
+        <!-- Compression (hidden when repair only) -->
+        <div class="setting-group" id="compressionGroup">
           <label for="compression">Compression</label>
           <select id="compression">
             <option value="none">None (no compression)</option>
@@ -78,6 +87,12 @@
             <option value="maximum">Minimal compression (largest files)</option>
           </select>
         </div>
+
+        <!-- Remove images -->
+        <label class="setting-group setting-group-full repair-option" id="removeImagesGroup">
+          <input type="checkbox" id="removeImages" />
+          <span>Remove images <span class="option-hint">— faster compression, smaller files</span></span>
+        </label>
 
         <!-- Compression workers (only relevant when compression is enabled) -->
         <div id="workersGroup" class="setting-group hidden">

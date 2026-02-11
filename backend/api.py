@@ -252,6 +252,8 @@ class Api:
         compression: str | None = config.get("compression")
         output_folder: str = config["outputFolder"]
         workers: int = min(8, max(1, int(config.get("workers", 2))))
+        remove_images: bool = bool(config.get("removeImages", False))
+        repair_only: bool = bool(config.get("repairOnly", False))
 
         if compression == "none" or compression == "":
             compression = None
@@ -322,6 +324,8 @@ class Api:
                             compression_workers=workers,
                             on_compress_part_start=on_part_start,
                             on_compress_progress=on_progress,
+                            remove_images=remove_images,
+                            repair_only=repair_only,
                         )
                     elif split_mode == "pages":
                         outputs = split_by_max_pages(
@@ -332,6 +336,7 @@ class Api:
                             compression_workers=workers,
                             on_compress_part_start=on_part_start,
                             on_compress_progress=on_progress,
+                            remove_images=remove_images,
                         )
                     elif split_mode == "size":
                         target_bytes = split_value * 1024 * 1024  # MB → bytes
@@ -343,6 +348,7 @@ class Api:
                             compression_workers=workers,
                             on_compress_part_start=on_part_start,
                             on_compress_progress=on_progress,
+                            remove_images=remove_images,
                         )
                     else:
                         self._push_error(f"Unknown split mode: {split_mode}")

@@ -67,6 +67,59 @@ def _open_pdf(path: str) -> pikepdf.Pdf:
                     pass
 
 
+def _get_image_xobject_names(page) -> set[str]:
+    """Return names of XObjects that are images (not forms) in the page's resources."""
+    image_names: set[str] = set()
+    try:
+        raw = page.obj
+        resources = raw.get("/Resources")
+        if resources is None:
+            return image_names
+        xobjects = resources.get("/XObject")
+        if xobjects is None:
+            return image_names
+        for name, xobj in xobjects.items():
+            try:
+                subtype = xobj.get("/Subtype")
+                if subtype == pikepdf.Name("/Image"):
+                    # Store normalized name for matching (with and without leading /)
+                    n = str(name) if hasattr(name, "__str__") else repr(name)
+                    image_names.add(n)
+                    image_names.add(n.lstrip("/"))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return image_names
+
+
+def _remove_images_from_page(pdf: pikepdf.Pdf, page) -> None:
+    """Remove image XObject references from a page's content stream. Modifies page in place."""
+    image_names = _get_image_xobject_names(page)
+    if not image_names:
+        return
+    try:
+        instructions = list(pikepdf.parse_content_stream(page))
+    except Exception:
+        return
+    filtered = []
+    for instr in instructions:
+        op = getattr(instr, "operator", None) or (instr[1] if len(instr) >= 2 else None)
+        operands = getattr(instr, "operands", None) or (instr[0] if len(instr) >= 1 else None)
+        is_do = op == pikepdf.Operator("Do") if op is not None else False
+        if is_do and operands and len(operands) >= 1:
+            name_obj = operands[0]
+            name_str = str(name_obj).lstrip("/")
+            if name_str in image_names:
+                continue  # Skip this Do (it draws an image)
+        filtered.append(instr)
+    try:
+        new_stream = pikepdf.unparse_content_stream(filtered)
+        page.Contents = pdf.make_stream(new_stream)
+    except Exception:
+        pass
+
+
 def _write_part(
     src: pikepdf.Pdf,
     start: int,
@@ -78,6 +131,8 @@ def _write_part(
     total_parts: int,
     page_offset: int,
     total_pages: int,
+    *,
+    remove_images: bool = False,
 ) -> None:
     """Copy pages [start, end) from *src* into a new PDF at *out_path*."""
     dst = pikepdf.new()
@@ -88,6 +143,8 @@ def _write_part(
                 os.remove(out_path)
             raise InterruptedError("Cancelled by user")
         dst.pages.append(src.pages[i])
+        if remove_images:
+            _remove_images_from_page(dst, dst.pages[-1])
         if progress_cb:
             progress_cb(
                 page_offset + (i - start) + 1,
@@ -96,6 +153,8 @@ def _write_part(
                 total_parts,
                 f"Writing part {part_idx + 1}/{total_parts}",
             )
+    if remove_images:
+        dst.remove_unreferenced_resources()
     dst.save(out_path)
     dst.close()
 
@@ -150,6 +209,8 @@ def _do_split(
     compression_workers: int = 1,
     on_compress_part_start: Optional[OnCompressPartStart] = None,
     on_compress_progress: Optional[OnCompressProgress] = None,
+    remove_images: bool = False,
+    repair_only: bool = False,
 ) -> list[str]:
     """
     Shared implementation: given pre-computed *sizes* (page counts per part),
@@ -167,11 +228,16 @@ def _do_split(
     # Phase 1: write all parts (no compression yet)
     for idx, size in enumerate(sizes):
         end = start + size
-        out_path = os.path.join(output_dir, f"{base_name}_part_{idx + 1}.pdf")
+        if repair_only and num_parts == 1:
+            out_name = f"{base_name}_repaired.pdf"
+        else:
+            out_name = f"{base_name}_part_{idx + 1}.pdf"
+        out_path = os.path.join(output_dir, out_name)
         _write_part(
             src, start, end, out_path,
             progress_cb, cancel_check,
             idx, num_parts, page_offset, total,
+            remove_images=remove_images,
         )
         if progress_cb:
             progress_cb(
@@ -265,14 +331,16 @@ def split_by_parts(
     compression_workers: int = 1,
     on_compress_part_start: Optional[OnCompressPartStart] = None,
     on_compress_progress: Optional[OnCompressProgress] = None,
+    remove_images: bool = False,
+    repair_only: bool = False,
 ) -> list[str]:
     """Split *input_path* into *num_parts* files with roughly equal page counts."""
     src = _open_pdf(input_path)
     total = len(src.pages)
     src.close()
 
-    if num_parts < 2:
-        raise ValueError("Number of parts must be at least 2")
+    if num_parts < 1:
+        raise ValueError("Number of parts must be at least 1")
     if num_parts > total:
         raise ValueError(f"Number of parts ({num_parts}) exceeds total pages ({total})")
 
@@ -285,6 +353,8 @@ def split_by_parts(
         compression_workers=compression_workers,
         on_compress_part_start=on_compress_part_start,
         on_compress_progress=on_compress_progress,
+        remove_images=remove_images,
+        repair_only=repair_only,
     )
 
 
@@ -299,6 +369,8 @@ def split_by_max_pages(
     compression_workers: int = 1,
     on_compress_part_start: Optional[OnCompressPartStart] = None,
     on_compress_progress: Optional[OnCompressProgress] = None,
+    remove_images: bool = False,
+    repair_only: bool = False,
 ) -> list[str]:
     """Split so that each output file has at most *max_pages* pages."""
     src = _open_pdf(input_path)
@@ -318,6 +390,8 @@ def split_by_max_pages(
         compression_workers=compression_workers,
         on_compress_part_start=on_compress_part_start,
         on_compress_progress=on_compress_progress,
+        remove_images=remove_images,
+        repair_only=repair_only,
     )
 
 
@@ -332,6 +406,8 @@ def split_by_target_size(
     compression_workers: int = 1,
     on_compress_part_start: Optional[OnCompressPartStart] = None,
     on_compress_progress: Optional[OnCompressProgress] = None,
+    remove_images: bool = False,
+    repair_only: bool = False,
 ) -> list[str]:
     """
     Split so that each output file is approximately under *target_bytes*.
@@ -362,4 +438,6 @@ def split_by_target_size(
         compression_workers=compression_workers,
         on_compress_part_start=on_compress_part_start,
         on_compress_progress=on_compress_progress,
+        remove_images=remove_images,
+        repair_only=repair_only,
     )

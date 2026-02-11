@@ -371,6 +371,13 @@ body {
   background: var(--danger-light);
 }
 
+.file-queue-hint {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-top: 12px;
+  line-height: 1.4;
+}
+
 /* ----------------------------------------------------------------
    Settings
    ---------------------------------------------------------------- */
@@ -388,6 +395,31 @@ body {
 
 .setting-group-full {
   grid-column: 1 / -1;
+}
+
+.repair-option {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  text-transform: none;
+  font-weight: 500;
+  font-size: 0.9rem;
+  letter-spacing: normal;
+  color: var(--text-primary);
+}
+
+.repair-option input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.option-hint {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-weight: 400;
 }
 
 .setting-hint {
