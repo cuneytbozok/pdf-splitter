@@ -4,6 +4,24 @@
 
 A local desktop app for splitting large PDF files into smaller parts. Built for people who need to break down massive PDFs (4000+ pages, 150–200 MB) into chunks that fit within the upload limits of AI tools like NotebookLM, ChatGPT Projects, Claude, Gemini Gems, and others.
 
+### Preview
+
+<p align="center">
+  <img src="screenshots/main-ui.png" alt="Main interface" width="45%">
+  <img src="screenshots/settings.png" alt="Settings" width="45%">
+</p>
+<p align="center">
+  <strong>Add PDFs</strong> (paste URLs or drag & drop) &nbsp;·&nbsp; <strong>Settings</strong> (split mode, compression, output folder)
+</p>
+
+<p align="center">
+  <img src="screenshots/queue.png" alt="File queue" width="45%">
+  <img src="screenshots/progress.png" alt="Progress" width="45%">
+</p>
+<p align="center">
+  <strong>Queue</strong> (files ready to process) &nbsp;·&nbsp; <strong>Progress</strong> (live splitting & compression status)
+</p>
+
 ---
 
 ## What It Does
@@ -215,6 +233,7 @@ PDF Splitter/
 ├── main.py                  # Entry point — launches the app window
 ├── PDF Splitter.app         # macOS-only app launcher (double-click to run)
 ├── Launch PDF Splitter (Debug).command  # macOS-only; runs in Terminal to show errors
+├── screenshots/             # App UI screenshots for README
 ├── requirements.txt         # Python dependencies
 ├── README.md                # This file
 ├── backend/
